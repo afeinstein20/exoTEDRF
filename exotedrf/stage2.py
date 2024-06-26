@@ -904,7 +904,8 @@ def backgroundstep(datafiles, background_model, baseline_ints, output_dir='./',
                 # If region to estimate background is not provided, use a
                 # default region.
                 if dimy == 96:
-                    raise NotImplementedError
+                    xl, xu = 10, 35
+                    yl, yu = 50, 85
                 else:
                     xl, xu = 235, 250
                     yl, yu = 715, 750
@@ -936,7 +937,7 @@ def backgroundstep(datafiles, background_model, baseline_ints, output_dir='./',
             grad_bkg = np.gradient(background_model, axis=1)
             step_pos = np.argmax(grad_bkg[:, 10:-10], axis=1) + 10 - 4
             # Apply differential scaling to either side of step.
-            for j in range(256):
+            for j in range(background_model.shape[0]):
                 model_scaled[i, j, :step_pos[j]] = background_model[j, :step_pos[j]] * scale_factor1 - shifts[i]
                 model_scaled[i, j, step_pos[j]:] = background_model[j, step_pos[j]:] * scale_factor2 - shifts[i]
         else:
