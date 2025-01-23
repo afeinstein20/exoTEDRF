@@ -13,9 +13,6 @@ import os
 import shutil
 import sys
 
-from exotedrf.stage1 import run_stage1
-from exotedrf.stage2 import run_stage2
-from exotedrf.stage3 import run_stage3
 from exotedrf.utils import fancyprint, parse_config, unpack_input_dir, \
     verify_path
 
@@ -30,6 +27,11 @@ config = parse_config(config_file)
 # Set CRDS cache path.
 os.environ['CRDS_PATH'] = config['crds_cache_path']
 os.environ['CRDS_SERVER_URL'] = 'https://jwst-crds.stsci.edu'
+
+# Import rest of pipeline stuff after initializing crds path.
+from exotedrf.stage1 import run_stage1
+from exotedrf.stage2 import run_stage2
+from exotedrf.stage3 import run_stage3
 
 # Save a copy of the config file.
 if config['output_tag'] != '':
@@ -83,6 +85,7 @@ if 1 in config['run_stages']:
                                 soss_background_model=config['soss_background_file'],
                                 baseline_ints=config['baseline_ints'],
                                 oof_method=config['oof_method'],
+                                superbias_method=config['superbias_method'],
                                 soss_timeseries=config['soss_timeseries'],
                                 soss_timeseries_o2=config['soss_timeseries_o2'],
                                 save_results=config['save_results'],

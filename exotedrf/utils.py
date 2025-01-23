@@ -69,7 +69,7 @@ def do_replacement(frame, badpix_map, dq=None, box_size=5):
     return frame_out, dq_out
 
 
-def download_stellar_spectra(st_teff, st_logg, st_met, outdir):
+def download_stellar_spectra(st_teff, st_logg, st_met, outdir, silent=False):
     """Download a grid of PHOENIX model stellar spectra.
 
     Parameters
@@ -82,6 +82,8 @@ def download_stellar_spectra(st_teff, st_logg, st_met, outdir):
         Stellar metallicity as [Fe/H].
     outdir : str
         Output directory.
+    silent : bool
+        If True, do not show any prints.
 
     Returns
     -------
@@ -97,11 +99,13 @@ def download_stellar_spectra(st_teff, st_logg, st_met, outdir):
     wave_file = 'WAVE_PHOENIX-ACES-AGSS-COND-2011.fits'
     wfile = '{}/{}'.format(outdir, wave_file)
     if not os.path.exists(wfile):
-        fancyprint('Downloading file {}.'.format(wave_file))
+        if not silent:
+            fancyprint('Downloading file {}.'.format(wave_file))
         cmd = 'wget -q -O {0} {1}HiResFITS/{2}'.format(wfile, fpath, wave_file)
         os.system(cmd)
     else:
-        fancyprint('File {} already downloaded.'.format(wfile))
+        if not silent:
+            fancyprint('File {} already downloaded.'.format(wfile))
 
     # Get stellar spectrum grid points.
     teffs, loggs, mets = get_stellar_param_grid(st_teff, st_logg, st_met)
@@ -122,7 +126,8 @@ def download_stellar_spectra(st_teff, st_logg, st_met, outdir):
                 ffile = '{}/{}'.format(outdir, thisfile)
                 ffiles.append(ffile)
                 if not os.path.exists(ffile):
-                    fancyprint('Downloading file {}.'.format(thisfile))
+                    if not silent:
+                        fancyprint('Downloading file {}.'.format(thisfile))
                     if met > 0:
                         cmd = 'wget -q -O {0} {1}HiResFITS/PHOENIX-ACES-AGSS-COND-2011/Z+{2}/{3}'.format(ffile, fpath, met, thisfile)
                     elif met == 0:
@@ -131,7 +136,8 @@ def download_stellar_spectra(st_teff, st_logg, st_met, outdir):
                         cmd = 'wget -q -O {0} {1}HiResFITS/PHOENIX-ACES-AGSS-COND-2011/Z{2}/{3}'.format(ffile, fpath, met, thisfile)
                     os.system(cmd)
                 else:
-                    fancyprint('File {} already downloaded.'.format(ffile))
+                    if not silent:
+                        fancyprint('File {} already downloaded.'.format(ffile))
 
     return wfile, ffiles
 
@@ -185,6 +191,39 @@ def format_out_frames(out_frames):
     return baseline_ints
 
 
+def format_out_frames_2(out_frames, max_nint):
+    """Format the indices of baseline frames.
+
+    Parameters
+    ----------
+    out_frames : array-like[int], int
+        Integration numbers of ingress and/or egress.
+    max_nint : int
+        Number of integrations in the exposure.
+
+    Returns
+    -------
+    baseline_ints : array-like[int]
+        Indicaes of baseline frames.
+    """
+
+    out_frames = np.atleast_1d(out_frames)
+    # For baseline just before ingress or after ingress.
+    if len(out_frames) == 1:
+        if out_frames[0] > 0:
+            baseline_ints = np.array([out_frames[0], -1])
+        else:
+            baseline_ints = np.array([0, max_nint + out_frames[0]])
+
+    # If baseline at both ingress and egress to be used.
+    elif len(out_frames) == 2:
+        baseline_ints = np.array([out_frames[0], max_nint + out_frames[-1]])
+    else:
+        raise ValueError('out_frames must have length 1 or 2.')
+
+    return baseline_ints
+
+
 def get_default_header():
     """Format the default header for the lightcurve file.
 
@@ -232,8 +271,13 @@ def get_detector_name(datafile):
         Name of detector.
     """
 
-    with datamodels.open(datafile) as d:
-        detector = d.meta.instrument.detector.lower()
+    if isinstance(datafile, str):
+        with fits.open(datafile) as file:
+            detector = file[0].header['DETECTOR'].lower()
+    else:
+        with datamodels.open(datafile) as d:
+            detector = d.meta.instrument.detector.lower()
+
     return detector
 
 
@@ -293,6 +337,21 @@ def get_dq_flag_metrics(dq_map, flags):
     return flagged
 
 
+def get_exouprf_built_in_models(model):
+    """Print names of exoUPRF bullt in models.
+    """
+
+    models = []
+    for item in dir(model):
+        if item in ['LightCurveModel', 'fancyprint']:
+            continue
+        this = getattr(model, item)
+        if hasattr(this, '__call__'):
+            models.append(item)
+
+    return models
+
+
 def get_filename_root(datafiles):
     """Get the file name roots for each segment. Assumes that file names
     follow the default jwst pipeline structure and are in correct segment
@@ -312,9 +371,9 @@ def get_filename_root(datafiles):
     fileroots = []
     # Open the datamodel.
     if isinstance(datafiles[0], str):
-        with datamodels.open(datafiles[0]) as data:
-            filename = data.meta.filename  # Get file name.
-            seg_start = data.meta.exposure.segment_number  # Starting segment.
+        with fits.open(datafiles[0]) as file:
+            filename = file[0].header['FILENAME']  # Get file name.
+            seg_start = file[0].header['EXSEGNUM']  # Starting segment.
     else:
         try:
             filename = datafiles[0].meta.filename
@@ -387,8 +446,13 @@ def get_instrument_name(datafile):
         Name of instrument.
     """
 
-    with datamodels.open(datafile) as d:
-        instrument = d.meta.instrument.name
+    if isinstance(datafile, str):
+        with fits.open(datafile) as file:
+            instrument = file[0].header['INSTRUME']
+    else:
+        with datamodels.open(datafile) as d:
+            instrument = d.meta.instrument.name
+
     return instrument
 
 
@@ -428,6 +492,29 @@ def get_interp_box(data, box_size, i, j, dimx):
     box_properties = np.array([median, stddev])
 
     return box_properties
+
+
+def get_nirspec_grating(datafile):
+    """Get name of grating.
+
+    Parameters
+    ----------
+    datafile : str, datamodel
+        Path to datafile or datafile itself.
+
+    Returns
+    -------
+    grating : str
+        Name of grating.
+    """
+
+    if isinstance(datafile, str):
+        grating = fits.getheader(datafile)['GRATING'].upper()
+    else:
+        with datamodels.open(datafile) as d:
+            grating = d.meta.instrument.grating.upper()
+
+    return grating
 
 
 def get_stellar_param_grid(st_teff, st_logg, st_met):
@@ -704,7 +791,7 @@ def interpolate_stellar_model_grid(model_files, st_teff, st_logg, st_met):
 
 def line_mle(x, y, e):
     """Analytical solution for Chi^2 of fitting a straight line to data.
-    All inputs are assumed to be 3D (ints, dimy, dimx).
+    All inputs are assumed to be 2D (dimy, dimx).
 
     Parameters
     ----------
@@ -731,25 +818,141 @@ def line_mle(x, y, e):
     # Following "Numerical recipes in C. The art of scientific computing"
     # Press, William H. (1989)
     # pdf: https://www.grad.hr/nastava/gs/prg/NumericalRecipesinC.pdf S15.2
-    sx_e = np.nansum(x[:, ::2] / e[:, ::2]**2, axis=1)
-    sxx_e = np.nansum((x[:, ::2] / e[:, ::2])**2, axis=1)
-    sy_e = np.nansum(y[:, ::2] / e[:, ::2]**2, axis=1)
-    sxy_e = np.nansum(x[:, ::2] * y[:, ::2] / e[:, ::2]**2, axis=1)
-    s_e = np.nansum(1 / e[:, ::2]**2, axis=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', category=RuntimeWarning)
 
-    m_e = (s_e * sxy_e - sx_e * sy_e) / (s_e * sxx_e - sx_e**2)
-    b_e = (sy_e - m_e * sx_e) / s_e
+        sx_e = np.nansum(x[::2] / e[::2]**2, axis=0)
+        sxx_e = np.nansum((x[::2] / e[::2])**2, axis=0)
+        sy_e = np.nansum(y[::2] / e[::2]**2, axis=0)
+        sxy_e = np.nansum(x[::2] * y[::2] / e[::2]**2, axis=0)
+        s_e = np.nansum(1 / e[::2]**2, axis=0)
 
-    sx_o = np.nansum(x[:, 1::2] / e[:, 1::2]**2, axis=1)
-    sxx_o = np.nansum((x[:, 1::2] / e[:, 1::2])**2, axis=1)
-    sy_o = np.nansum(y[:, 1::2] / e[:, 1::2]**2, axis=1)
-    sxy_o = np.nansum(x[:, 1::2] * y[:, 1::2] / e[:, 1::2]**2, axis=1)
-    s_o = np.nansum(1 / e[:, 1::2]**2, axis=1)
+        m_e = (s_e * sxy_e - sx_e * sy_e) / (s_e * sxx_e - sx_e**2)
+        b_e = (sy_e - m_e * sx_e) / s_e
 
-    m_o = (s_o * sxy_o - sx_o * sy_o) / (s_o * sxx_o - sx_o**2)
-    b_o = (sy_o - m_o * sx_o) / s_o
+        sx_o = np.nansum(x[1::2] / e[1::2]**2, axis=0)
+        sxx_o = np.nansum((x[1::2] / e[1::2])**2, axis=0)
+        sy_o = np.nansum(y[1::2] / e[1::2]**2, axis=0)
+        sxy_o = np.nansum(x[1::2] * y[1::2] / e[1::2]**2, axis=0)
+        s_o = np.nansum(1 / e[1::2]**2, axis=0)
+
+        m_o = (s_o * sxy_o - sx_o * sy_o) / (s_o * sxx_o - sx_o**2)
+        b_o = (sy_o - m_o * sx_o) / s_o
 
     return m_e, b_e, m_o, b_o
+
+
+def make_baseline_stack_dm(datafiles, baseline_ints):
+    """For a given set of input files, make a deep stack of only the
+    integrations part of the timeseries baseline -- for datamodel inputs.
+
+    Parameters
+    ----------
+    datafiles : array-like(str), array-like(CubeModel), array-like(RampModel)
+        Input datafiles.
+    baseline_ints: array-like(int)
+        Integration numbers of the baseline.
+
+    Returns
+    -------
+    stack : np.ndarray(float)
+        Deep stack of the baseline integrations.
+    """
+
+    firsttime = True
+    # Go through all passed files and figure out which integrations
+    # correspond to the baseline.
+    for file in datafiles:
+        with open_filetype(file) as currentfile:
+            # Start and end integrations of current segment.
+            start = currentfile.meta.exposure.integration_start
+            end = currentfile.meta.exposure.integration_end
+            # Figure out which integrations (if any) are part of the
+            # baseline.
+            ints = np.linspace(start - 1, end - 1, end - start + 1)
+            ii = np.where(
+                (ints < baseline_ints[0]) | (ints >= baseline_ints[-1]))[0]
+            # Add only these integrations to the cube.
+            if firsttime:
+                cube = currentfile.data[ii]
+                firsttime = False
+            else:
+                cube = np.concatenate([cube, currentfile.data[ii]])
+
+    # Do the stacking.
+    stack = make_deepstack(cube)
+
+    return stack
+
+
+def make_baseline_stack_fits(datafiles, baseline_ints):
+    """For a given set of input files, make a deep stack of only the
+    integrations part of the timeseries baseline -- for fits file inputs.
+
+    Parameters
+    ----------
+    datafiles : array-like(str)
+        Input datafiles.
+    baseline_ints: array-like(int)
+        Integration numbers of the baseline.
+
+    Returns
+    -------
+    stack : np.ndarray(float)
+        Deep stack of the baseline integrations.
+    """
+
+    firsttime = True
+    # Go through all passed files and figure out which integrations
+    # correspond to the baseline.
+    for file in datafiles:
+        with fits.open(file) as thisfile:
+            # Start and end integrations of current segment.
+            start = thisfile[0].header['INTSTART']
+            end = thisfile[0].header['INTEND']
+            # Figure out which integrations (if any) are part of the
+            # baseline.
+            ints = np.linspace(start - 1, end - 1, end - start + 1)
+            ii = np.where(
+                (ints < baseline_ints[0]) | (ints >= baseline_ints[-1]))[0]
+            # Add only these integrations to the cube.
+            if firsttime:
+                cube = thisfile[1].data[ii]
+                firsttime = False
+            else:
+                cube = np.concatenate([cube, thisfile[1].data[ii]])
+
+    # Do the stacking.
+    stack = make_deepstack(cube)
+
+    return stack
+
+
+def make_custom_superbias(datafiles):
+    """Cunstruct a custom superbias frame by stacking all of the 0th group
+    frames in a TSO.
+
+    Parameters
+    ----------
+    datafiles : array-like(str)
+        List of paths to datafiles.
+
+    Returns
+    -------
+    superbias : ndarray(float)
+        Custom superbias reference frame.
+    """
+
+    # Stack 0th group frames from all integrations.
+    for i, file in enumerate(datafiles):
+        if i == 0:
+            superbias = fits.getdata(file)[:, 0]
+        else:
+            superbias = np.concatenate([superbias, fits.getdata(file)[:, 0]])
+    # Collapse along integrations axis.
+    superbias = bn.nanmedian(superbias, axis=0)
+
+    return superbias
 
 
 def make_deepstack(cube):
@@ -770,6 +973,48 @@ def make_deepstack(cube):
     deepstack = bn.nanmedian(cube, axis=0)
 
     return deepstack
+
+
+def make_soss_tracemask(xpix, ypix, mask_width, dimy, dimx, invert=False):
+    """Construct a mask of a SOSS trace where 1-valued pixels denote the trace
+    and 0-valued pixels not the trace.
+
+    Parameters
+    ----------
+    xpix : array-like(float)
+        X-positions of the trace.
+    ypix : array-like(float)
+        Y-position of trace.
+    mask_width : int
+        Full width of the trace mask.
+    dimy : int
+        Y-dimension of the mask.
+    dimx : int
+        X-dimension of the mask
+    invert : bool
+        If True, make 0-valued pixels the trace.
+
+    Returns
+    -------
+    mask : array-like(int)
+        SOSS trace mask.
+    """
+
+    # Define the upper and lower boundaries of the mask.
+    low = np.max([np.zeros_like(ypix),
+                  ypix - mask_width/2], axis=0).astype(int)
+    up = np.min([dimy * np.ones_like(ypix),
+                 ypix + mask_width/2], axis=0).astype(int)
+
+    # Add trace positions to mask.
+    mask = np.zeros((dimy, dimx))
+    for i, x in enumerate(xpix):
+        mask[low[i]:up[i], int(x)] = 1
+
+    if invert is True:
+        mask = (~mask.astype(bool)).astype(int)
+
+    return mask
 
 
 def open_filetype(datafile):
@@ -891,7 +1136,8 @@ def save_extracted_spectra(filename, data, names, units, header_dict=None,
     return param_dict
 
 
-def save_ld_priors(wave, c1, c2, order, target, m_h, teff, logg, outdir):
+def save_ld_priors(wave, ld, order, target, m_h, teff, logg, outdir,
+                   ld_model_type, observing_mode):
     """Write model limb darkening parameters to a file to be used as priors
     for light curve fitting.
 
@@ -899,10 +1145,8 @@ def save_ld_priors(wave, c1, c2, order, target, m_h, teff, logg, outdir):
     ----------
     wave : array-like[float]
         Wavelength axis.
-    c1 : array-like[float]
-        c1 parameter for two-parameter limb darkening law.
-    c2 : array-like[float]
-        c2 parameter for two-parameter limb darkening law.
+    ld : list[float]
+        Model limb darkening values.
     order : int
         SOSS order.
     target : str
@@ -915,30 +1159,55 @@ def save_ld_priors(wave, c1, c2, order, target, m_h, teff, logg, outdir):
         Host star gravity.
     outdir : str
         Directory to which to save file.
+    ld_model_type : str
+        Limb darkening model identifier.
+    observing_mode : str
+        Observing mode identifier.
     """
 
     # Create dictionary with model LD info.
-    dd = {'wave': wave, 'c1': c1, 'c2': c2}
+    dd = {'wave': wave}
+    if ld_model_type == 'quadratic-kipping':
+        dd['q1'] = ld[0]
+        dd['q2'] = ld[1]
+    else:
+        dd['u1'] = ld[0]
+        if ld_model_type != 'linear':
+            dd['u2'] = ld[1]
+        if ld_model_type == 'nonlinear':
+            dd['u3'] = ld[2]
+            dd['u4'] = ld[3]
     df = pd.DataFrame(data=dd)
     # Remove old LD file if one exists.
-    filename = target+'_order' + str(order) + '_exotic-ld_quadratic.csv'
+    if observing_mode == 'NIRISS/SOSS':
+        filename = target+'_order' + str(order) + '_exotic-ld_{}.csv'.format(ld_model_type)
+    else:
+        filename = target + '_NRS' + str(order) + '_exotic-ld_{}.csv'.format(ld_model_type)
     if os.path.exists(outdir + filename):
         os.remove(outdir + filename)
     # Add header info.
     f = open(outdir + filename, 'a')
     f.write('# Target: {}\n'.format(target))
-    f.write('# Instrument: NIRISS/SOSS\n')
-    f.write('# Order: {}\n'.format(order))
+    f.write('# Instrument: {}\n'.format(observing_mode))
+    f.write('# SOSS Order/NRS Detector: {}\n'.format(order))
     f.write('# Author: {}\n'.format(os.environ.get('USER')))
     f.write('# Date: {}\n'.format(datetime.utcnow().replace(microsecond=0).isoformat()))
     f.write('# Stellar M/H: {}\n'.format(m_h))
     f.write('# Stellar log g: {}\n'.format(logg))
     f.write('# Stellar Teff: {}\n'.format(teff))
     f.write('# Algorithm: ExoTiC-LD\n')
-    f.write('# Limb Darkening Model: quadratic\n')
+    f.write('# Limb Darkening Model: {}\n'.format(ld_model_type))
     f.write('# Column wave: Central wavelength of bin (micron)\n')
-    f.write('# Column c1: Quadratic Coefficient 1\n')
-    f.write('# Column c2: Quadratic Coefficient 2\n')
+    if ld_model_type == 'quadratic-kipping':
+        f.write('# Column q1: Quadratic Coefficient 1\n')
+        f.write('# Column q2: Quadratic Coefficient 2\n')
+    else:
+        f.write('# Column u1: {} Coefficient 1\n'.format(ld_model_type))
+        if ld_model_type != 'linear':
+            f.write('# Column u2: {} Coefficient 1\n'.format(ld_model_type))
+        if ld_model_type == 'nonlinear':
+            f.write('# Column u3: {} Coefficient 1\n'.format(ld_model_type))
+            f.write('# Column u4: {} Coefficient 1\n'.format(ld_model_type))
     f.write('#\n')
     df.to_csv(f, index=False)
     f.close()
